@@ -15,6 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Layer 2 — Ollama binary (~150 MB; cached until install script changes)
+# Pinned to 0.30.10: newer Ollama releases require NVIDIA driver 550+, and some
+# of our GPU hosts still run driver 535 (which supports CUDA 12.2) — 0.30.10 is
+# the newest release confirmed to still detect/use the GPU on driver 535.
+# See https://github.com/ollama/ollama/releases/tag/v0.30.10 before bumping.
+ENV OLLAMA_VERSION=0.30.10
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Layer 3 — Python dependencies (cached until requirements.txt changes)
