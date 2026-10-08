@@ -15,6 +15,7 @@ MONGO_MACHINE_USER = os.environ.get("MONGO_MACHINE_USER")
 MONGO_MACHINE_PASSWORD = os.environ.get("MONGO_MACHINE_PASSWORD")
 MONGO_DATABASE = os.environ.get("MONGO_DATABASE", "ai4me_llm_tools")
 MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "transcript_results")
+MONGO_AUTH_SOURCE = os.environ.get("MONGO_AUTH_SOURCE", "admin")
 
 _mongo_client: Optional[MongoClient] = None
 
@@ -29,7 +30,7 @@ def _get_collection() -> Optional[Collection]:
         if MONGO_MACHINE_USER:
             uri = (
                 f"mongodb://{MONGO_MACHINE_USER}:{MONGO_MACHINE_PASSWORD}"
-                f"@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DATABASE}?authSource=admin"
+                f"@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DATABASE}?authSource={MONGO_AUTH_SOURCE}"
             )
         else:
             uri = f"mongodb://{MONGO_HOST}:{MONGO_PORT}/{MONGO_DATABASE}"

@@ -174,6 +174,7 @@ docker compose build
       - MONGO_MACHINE_PASSWORD=${MONGO_MACHINE_PASSWORD:-}
       - MONGO_DATABASE=${MONGO_DATABASE:-ai4me_llm_tools}
       - MONGO_COLLECTION=${MONGO_COLLECTION:-transcript_results}
+      - MONGO_AUTH_SOURCE=${MONGO_AUTH_SOURCE:-admin}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -318,6 +319,7 @@ A Mongo write failure (unreachable, auth error, etc.) is logged but never fails 
 | `MONGO_MACHINE_PASSWORD` | *(unset)* | |
 | `MONGO_DATABASE` | `ai4me_llm_tools` | |
 | `MONGO_COLLECTION` | `transcript_results` | |
+| `MONGO_AUTH_SOURCE` | `admin` | The database `MONGO_MACHINE_USER` was created/authenticates against — not necessarily the same as `MONGO_DATABASE`. A user scoped to a specific database (rather than `admin`) needs this set to that database's name, or every write fails with `AuthenticationFailed` |
 
 In `docker-compose.yml`, all `MONGO_*` values are pulled from `${VAR}` (with sensible defaults, e.g. `MONGO_HOST` defaults to empty = feature off) — set them in a local `.env` file (git-ignored) rather than editing the compose file, so credentials are never committed.
 
