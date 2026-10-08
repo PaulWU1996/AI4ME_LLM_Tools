@@ -14,7 +14,7 @@ MONGO_PORT = os.environ.get("MONGO_PORT", "27017")
 MONGO_MACHINE_USER = os.environ.get("MONGO_MACHINE_USER")
 MONGO_MACHINE_PASSWORD = os.environ.get("MONGO_MACHINE_PASSWORD")
 MONGO_DATABASE = os.environ.get("MONGO_DATABASE", "ai4me_llm_tools")
-MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "transcript_results")
+MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "scene_summary")
 MONGO_AUTH_SOURCE = os.environ.get("MONGO_AUTH_SOURCE", "admin")
 
 _mongo_client: Optional[MongoClient] = None

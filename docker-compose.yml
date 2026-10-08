@@ -22,7 +22,7 @@ services:
       - MONGO_MACHINE_USER=${MONGO_MACHINE_USER:-}
       - MONGO_MACHINE_PASSWORD=${MONGO_MACHINE_PASSWORD:-}
       - MONGO_DATABASE=${MONGO_DATABASE:-ai4me_llm_tools}
-      - MONGO_COLLECTION=${MONGO_COLLECTION:-transcript_results}
+      - MONGO_COLLECTION=${MONGO_COLLECTION:-scene_summary}
       - MONGO_AUTH_SOURCE=${MONGO_AUTH_SOURCE:-admin}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
