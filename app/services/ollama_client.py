@@ -2,7 +2,6 @@ import json
 import logging
 import time
 from pathlib import Path
-import logging
 
 import httpx
 
@@ -10,13 +9,6 @@ from app.config import PROMPTS_DIR, current_model
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 
-<<<<<<< HEAD
-=======
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-_DEFAULT_REQUIREMENTS = (_PROMPTS_DIR / "transcript.txt").read_text()
-_OUTPUT_STRUCTURE = (_PROMPTS_DIR / "output_structure.txt").read_text()
-
->>>>>>> 694131611a093862911d661f23ce1d68c2216695
 logger = logging.getLogger(__name__)
 
 async def is_ready() -> bool:
@@ -37,16 +29,6 @@ def _build_prompt(transcript: str, language: str, custom_requirements: str | Non
     if custom_requirements:
         requirements = f"{default_requirements}\n\n{custom_requirements}"
 
-<<<<<<< HEAD
-=======
-def _build_prompt(transcript: str, language: str, custom_requirements: str | None) -> str:
-    requirements = _DEFAULT_REQUIREMENTS
-    if custom_requirements:
-        requirements = f"{_DEFAULT_REQUIREMENTS}\n\n{custom_requirements}"
-
-    # format_map on requirements — keeps {language} slot; transcript is concatenated
-    # directly to avoid KeyError if transcript text contains { } characters
->>>>>>> 694131611a093862911d661f23ce1d68c2216695
     rendered_requirements = requirements.format_map({"language": language})
     return (
         "<system>\n"
