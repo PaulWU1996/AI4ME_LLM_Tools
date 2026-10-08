@@ -25,6 +25,8 @@ RUN pip3 install --break-system-packages -r requirements.txt
 # Layer 4 — Application code (most frequently changed; always last)
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY config/ ./config/
+COPY prompts/ ./prompts/
 RUN chmod +x /app/scripts/entrypoint.sh
 
 # Declare mount points so Docker creates them with correct ownership

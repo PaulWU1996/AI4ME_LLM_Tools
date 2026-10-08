@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -z "${OLLAMA_MODEL:-}" ]; then
-  echo "ERROR: OLLAMA_MODEL environment variable is not set" >&2
+CONFIG_DIR="${CONFIG_DIR:-/app/config}"
+MODEL_FILE="${CONFIG_DIR}/model.txt"
+
+if [ ! -s "$MODEL_FILE" ]; then
+  echo "ERROR: ${MODEL_FILE} is missing or empty — set it to a model tag, e.g. 'llama3.2:3b'" >&2
   exit 1
 fi
+OLLAMA_MODEL="$(tr -d '[:space:]' < "$MODEL_FILE")"
+echo "Using model from ${MODEL_FILE}: ${OLLAMA_MODEL}"
 
 # Detect GPU and log which compute backend Ollama will use
 if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null 2>&1; then

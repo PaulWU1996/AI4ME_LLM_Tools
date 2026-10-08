@@ -1,16 +1,16 @@
-# AI4ME Transcript Processor
+# AI4ME LLM Tools
 
-A containerized FastAPI service that converts transcripts into shortform content. An external orchestrator sends a `job_id`, this service reads the transcript from a shared volume, runs it through a local Ollama LLM, and returns a catchy title + summary — also writing the result back to the shared volume.
+A containerized FastAPI service that processes transcripts with a local Ollama LLM. An external orchestrator sends a `job_id` and a `mode`; each mode is a distinct function with its own prompt and response schema. The service reads the transcript from a shared volume, runs it through the LLM, and returns the mode's structured result — also writing it to `output.json` on the shared volume.
 
 ## How it works
 
 ```
 Orchestrator
     │  1. Writes  shared/{job_id}/transcript.txt
-    │  2. POST /process  {"job_id": "...", "job_type": "script"}
+    │  2. POST /process  {"job_id": "...", "job_type": "script", "mode": "summary"}
     │  3. Reads   shared/{job_id}/output.json
     ▼
-transcript-processor container
+llm-tools container
     ├── FastAPI :8000
     └── Ollama  :11434 (localhost only, models bind-mounted from host)
 ```
@@ -18,11 +18,11 @@ transcript-processor container
 ## Quick start
 
 ```bash
-# 1. Edit docker-compose.yml and set OLLAMA_MODEL to the model you want to use
+# 1. Edit config/model.txt and set it to the model you want to use
 
 # 2. Build and start — automatically detects GPU and picks the right mode
-#    First run: the container will automatically pull OLLAMA_MODEL into ./weights/ollama
-#    if it isn't already there (requires internet access, may take a few minutes).
+#    First run: the container will automatically pull the model from config/model.txt
+#    into ./weights/ollama if it isn't already there (requires internet access, may take a few minutes).
 ./scripts/run.sh up --build
 
 # 3. Poll until ready
@@ -45,6 +45,11 @@ curl -X POST http://localhost:8000/process \
     "prompts": "You are a news editor. Write a punchy headline and a one-sentence summary."
   }'
 
+# Run another mode (tags instead of title + summary):
+curl -X POST http://localhost:8000/process \
+  -H 'Content-Type: application/json' \
+  -d '{"job_id": "test123", "job_type": "script", "mode": "tagging"}'
+
 # With a callback URL (result is POSTed there after processing):
 curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
@@ -59,11 +64,15 @@ curl -X POST http://localhost:8000/process \
 |---|---|---|---|
 | `job_id` | string | yes | Orchestrator-assigned job identity |
 | `job_type` | string | yes | Must be `"script"` |
+| `mode` | string | no | Which function to run — `"summary"` (default) or `"tagging"`. See [Modes](#modes) |
 | `language` | string | no | Response language, e.g. `"en"`, `"zh"` (default `"en"`) |
 | `callback_url` | string | no | If set, result is POSTed here after `output.json` is written |
-| `prompts` | string | no | Overrides the requirements section of the prompt (see Prompt structure below); must contain a `{language}` slot |
+| `prompts` | string | no | Overrides the requirements section of the mode's prompt (see [Prompt structure](#prompt-structure)); must contain a `{language}` slot |
+| `transcript` | string | no | Transcript text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
+| `record_key` | string | no | Key to upsert the result under in MongoDB, if configured. Defaults to `job_id` when omitted. See [Result persistence](#result-persistence) |
+| `metadata` | object | no | Arbitrary caller-supplied context (e.g. `vpid`, `scene_id`) stored as-is alongside the result in MongoDB. Not interpreted by this service |
 
-**Response (HTTP 200):**
+**Response (HTTP 200):** the shape depends on `mode`. For `summary`:
 ```json
 {
   "job_id": "test123",
@@ -74,13 +83,23 @@ curl -X POST http://localhost:8000/process \
 }
 ```
 
-The same payload is written to `shared/{job_id}/output.json`.
+For `tagging`:
+```json
+{
+  "job_id": "test123",
+  "tags": ["science", "habits", "productivity"],
+  "model": "llama3.2:3b",
+  "processing_time_ms": 3100
+}
+```
+
+The same payload is written to `shared/{job_id}/output.json`, and (if MongoDB is configured) upserted into MongoDB — see [Result persistence](#result-persistence).
 
 **Error responses:**
 
 | Status | Condition |
 |---|---|
-| 404 | `transcript.txt` not found for the given `job_id` |
+| 404 | No `transcript` field in the request and `transcript.txt` not found for the given `job_id` |
 | 413 | Transcript exceeds `MAX_TRANSCRIPT_CHARS` limit |
 | 422 | `job_type` is not `"script"`, or transcript is empty |
 | 503 | Ollama is not ready |
@@ -88,10 +107,40 @@ The same payload is written to `shared/{job_id}/output.json`.
 ### `GET /health`
 
 ```json
-{ "status": "ok", "ollama_ready": true, "model": "llama3.2:3b" }
+{ "status": "ok", "ollama_ready": true, "model": "llama3.2:3b", "mongo_ready": true }
 ```
 
 Returns HTTP 503 if Ollama is not ready. Poll this before sending the first job.
+
+`mongo_ready` is `true` both when MongoDB is reachable and when it isn't configured at all (the feature is off, not degraded) — it's only `false` when `MONGO_HOST` is set but the connection fails. It never causes a 503; Ollama is the only hard dependency.
+
+## Modes
+
+A mode is one function this service can perform on a transcript. Each mode has a name, a response schema, and its own prompt files. The mode is selected with the `mode` field on every request.
+
+| Mode | Response fields | Purpose |
+|---|---|---|
+| `summary` (default) | `title`, `summary` | Catchy headline + bullet-point summary |
+| `tagging` | `tags` | Descriptive topic/keyword tags in order of discussion |
+
+**Adding a new mode** (e.g. `sentiment`) requires two prompt files:
+
+```
+prompts/sentiment/transcript.txt         # requirements — must contain a {language} slot
+prompts/sentiment/output_structure.txt   # the exact JSON shape the model must return
+```
+
+Then register the mode in the `MODES` registry in `app/routers/process.py`:
+
+```python
+MODES: dict[str, tuple[Path, type[SummaryResponse] | type[TaggingResponse] | ...]] = {
+    "summary": (Path("summary"), SummaryResponse),
+    "tagging": (Path("tagging"), TaggingResponse),
+    "sentiment": (Path("sentiment"), SentimentResponse),   # new
+}
+```
+
+The response model declares the mode's output fields, and a matching branch in `_validate_result` checks the LLM's JSON before it is returned or written to `output.json`. No other code changes are needed — the mode is discovered at request time, so any new `mode` value starts working immediately after a rebuild.
 
 ## Composing with the orchestrator
 
@@ -112,12 +161,19 @@ docker compose build
     volumes:
       - ./weights/ollama:/root/.ollama/models
       - ./shared:/shared
+      - ./prompts:/app/prompts
+      - ./config:/app/config
     environment:
-      - OLLAMA_MODEL=llama3.2:3b
       - SHARED_VOLUME_PATH=/shared
       - UVICORN_WORKERS=1
       - UVICORN_LOG_LEVEL=info
       - MAX_TRANSCRIPT_CHARS=0
+      - MONGO_HOST=
+      - MONGO_PORT=27017
+      - MONGO_MACHINE_USER=${MONGO_MACHINE_USER}
+      - MONGO_MACHINE_PASSWORD=${MONGO_MACHINE_PASSWORD}
+      - MONGO_DATABASE=ai4me_llm_tools
+      - MONGO_COLLECTION=transcript_results
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -142,21 +198,23 @@ docker push your-registry/ai4me-transcript:latest
 ```
 Then update `image:` in the snippet above to match the registry path.
 
+The orchestrator must provide its own `./config/model.txt` and `./prompts/` directories alongside its `docker-compose.yml` — see [Model switching](#model-switching) and [Prompt structure](#prompt-structure).
+
 ## Prompt structure
 
-The prompt sent to Ollama is assembled from two separate files:
+Each mode's prompt is assembled from two files inside `prompts/{mode}/`:
 
 | File | Editable | Purpose |
 |---|---|---|
-| `app/prompts/transcript.txt` | Yes — overridable via `prompts` field | Requirements: what the model should produce and in what style |
-| `app/prompts/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
+| `prompts/{mode}/transcript.txt` | Yes — overridable via the `prompts` field | Requirements: what the model should produce and in what style |
+| `prompts/{mode}/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
 
 The final prompt assembled at runtime looks like:
 
 ```
 <system>
-{requirements}          ← from transcript.txt, or the prompts field if provided
-{output_structure}      ← always from output_structure.txt, never overridden
+{requirements}          ← from {mode}/transcript.txt, or the prompts field if provided
+{output_structure}      ← always from {mode}/output_structure.txt, never overridden
 </system>
 
 <user>
@@ -172,13 +230,82 @@ Keeping the output structure fixed means the JSON parser always gets a predictab
 
 ## Configuration
 
-All values are hardcoded in `docker-compose.yml` — no `.env` file needed. The only line you'll typically change is `OLLAMA_MODEL`.
+Most values are hardcoded in `docker-compose.yml`. Two things are instead mounted from the host so they can be changed without rebuilding the image — see below.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `OLLAMA_MODEL` | `llama3.2:3b` | Model tag; pulled automatically on first run if missing |
 | `SHARED_VOLUME_PATH` | `/shared` | Container-side path — matches `./shared` mount |
 | `MAX_TRANSCRIPT_CHARS` | `0` | Character limit per request; `0` = no limit |
+
+The model is not an environment variable — see [Model switching](#model-switching) below.
+
+### Prompts mount
+
+`./prompts` (at the repo root, alongside `docker-compose.yml`) is bind-mounted to `/app/prompts` inside the container. An external party can edit an existing mode's `transcript.txt` / `output_structure.txt`, or add a whole new mode folder, directly on the host — changes take effect on the next request, no rebuild needed. Registering a brand-new `mode` value still requires adding it to `JOB_TYPES` in `app/routers/process.py` (and a rebuild), since that's a code change, not a prompt change.
+
+### Model switching
+
+`./config` is bind-mounted to `/app/config`. `config/model.txt` holds the active model tag as a single line, e.g.:
+
+```
+llama3.2:3b
+```
+
+It is re-read on every `/process` request, so editing this file and sending the next request switches the model immediately — no restart required. This is meant for occasional manual switches, not per-request routing; Ollama itself keeps the current model loaded in memory and only swaps it when the tag actually changes.
+
+The model must already be pulled into `./weights/ollama` before switching to it — the container only auto-pulls the model named in `config/model.txt` at startup, not on every switch.
+
+`config/model.txt` is required — the container refuses to start if it's missing or empty.
+
+### Result persistence
+
+By default, results only go to `shared/{job_id}/output.json`. Setting `MONGO_HOST` (and the other `MONGO_*` env vars — see `.env.example`) also upserts every successful result into MongoDB. The feature is entirely optional: with `MONGO_HOST` unset, no connection is ever attempted and nothing else changes.
+
+Documents are upserted by a `key` field, derived as `record_key` if the request provided one, otherwise `job_id`:
+
+```json
+{
+  "key": "<record_key or job_id>",
+  "job_id": "test123",
+  "record_key": null,
+  "job_type": "summary",
+  "language": "en",
+  "title": "...",
+  "summary": "...",
+  "model": "llama3.2:3b",
+  "processing_time_ms": 4217,
+  "metadata": null,
+  "created_at": "2026-10-08T12:00:00Z",
+  "updated_at": "2026-10-08T12:00:00Z"
+}
+```
+
+`job_id` and `record_key` serve different purposes and are both kept on the document:
+- **`job_id`** is the per-invocation id used for the shared-volume path, logs, and response correlation. It doesn't need to repeat across calls.
+- **`record_key`** (via the `record_key` request field) lets a caller supply its own stable, deterministic key — e.g. a hash of `programme_id + scene_id + sorted avoid-types` — so that re-processing "the same logical thing" under a different `job_id` still upserts the same document instead of creating a new one. This is what makes a cache-check pattern work: a caller can query MongoDB directly by that same key *before* ever calling `/process`, and only call it on a miss.
+
+`metadata` is stored exactly as given, under its own key — use it to carry whatever context your orchestrator needs to look records up later (`vpid`, `scene_id`, etc.); this service never reads or validates it.
+
+A Mongo write failure (unreachable, auth error, etc.) is logged but never fails the `/process` request — `output.json` remains the durable, required artifact, and MongoDB is an additive sink on top of it.
+
+**Env vars** (see `.env.example`):
+
+| Variable | Default | Notes |
+|---|---|---|
+| `MONGO_HOST` | *(unset)* | Leave unset to disable the feature entirely |
+| `MONGO_PORT` | `27017` | |
+| `MONGO_MACHINE_USER` | *(unset)* | Omit for an unauthenticated connection (e.g. local testing) |
+| `MONGO_MACHINE_PASSWORD` | *(unset)* | |
+| `MONGO_DATABASE` | `ai4me_llm_tools` | |
+| `MONGO_COLLECTION` | `transcript_results` | |
+
+In `docker-compose.yml`, `MONGO_MACHINE_USER`/`MONGO_MACHINE_PASSWORD` are pulled from `${VAR}` — set them in a local `.env` file (git-ignored) rather than editing the compose file, so credentials are never committed.
+
+**Operational note:** once a real MongoDB instance is in use, add a unique index on `key` to guarantee upsert correctness under concurrent writes:
+```
+db.transcript_results.createIndex({"key": 1}, {"unique": true})
+```
+This service doesn't manage index lifecycle, so this is a one-time manual/deploy-time step.
 
 ## GPU support
 
