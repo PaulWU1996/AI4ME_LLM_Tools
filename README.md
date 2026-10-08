@@ -168,12 +168,12 @@ docker compose build
       - UVICORN_WORKERS=1
       - UVICORN_LOG_LEVEL=info
       - MAX_TRANSCRIPT_CHARS=0
-      - MONGO_HOST=
-      - MONGO_PORT=27017
-      - MONGO_MACHINE_USER=${MONGO_MACHINE_USER}
-      - MONGO_MACHINE_PASSWORD=${MONGO_MACHINE_PASSWORD}
-      - MONGO_DATABASE=ai4me_llm_tools
-      - MONGO_COLLECTION=transcript_results
+      - MONGO_HOST=${MONGO_HOST:-}
+      - MONGO_PORT=${MONGO_PORT:-27017}
+      - MONGO_MACHINE_USER=${MONGO_MACHINE_USER:-}
+      - MONGO_MACHINE_PASSWORD=${MONGO_MACHINE_PASSWORD:-}
+      - MONGO_DATABASE=${MONGO_DATABASE:-ai4me_llm_tools}
+      - MONGO_COLLECTION=${MONGO_COLLECTION:-transcript_results}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -319,7 +319,7 @@ A Mongo write failure (unreachable, auth error, etc.) is logged but never fails 
 | `MONGO_DATABASE` | `ai4me_llm_tools` | |
 | `MONGO_COLLECTION` | `transcript_results` | |
 
-In `docker-compose.yml`, `MONGO_MACHINE_USER`/`MONGO_MACHINE_PASSWORD` are pulled from `${VAR}` — set them in a local `.env` file (git-ignored) rather than editing the compose file, so credentials are never committed.
+In `docker-compose.yml`, all `MONGO_*` values are pulled from `${VAR}` (with sensible defaults, e.g. `MONGO_HOST` defaults to empty = feature off) — set them in a local `.env` file (git-ignored) rather than editing the compose file, so credentials are never committed.
 
 **Operational note:** once a real MongoDB instance is in use, add a unique index on `key` to guarantee upsert correctness under concurrent writes:
 ```
