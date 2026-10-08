@@ -191,7 +191,27 @@ docker compose build
               capabilities: [gpu]
 ```
 
-If distributing across machines, push to a registry first:
+If distributing across machines, push to a registry first. For AWS ECR, use the bundled script instead of plain `docker tag`/`docker push`:
+
+```bash
+cp .env.example .env   # fill in AWS_ACCOUNT_ID, ECR_REPO, AWS_REGION below (Mongo vars are unrelated to this step)
+./scripts/push-to-ecr.sh
+```
+
+Prerequisites: [AWS CLI](https://aws.amazon.com/cli/) installed and `aws configure`'d with credentials that can push to ECR.
+
+`.env` (git-ignored — copy from `.env.example` and never commit it):
+
+| Variable | Required for | Notes |
+|---|---|---|
+| `AWS_ACCOUNT_ID` | ECR push | Your AWS account id; used to build the registry hostname |
+| `ECR_REPO` | ECR push | Target ECR repository name; created automatically if it doesn't exist |
+| `AWS_REGION` | ECR push | AWS region the repository lives in |
+| `MONGO_*` | Result persistence (runtime, not build) | See [Result persistence](#result-persistence) — unrelated to pushing the image |
+
+`./scripts/push-to-ecr.sh` (see `scripts/lib-ecr.sh`) loads `.env`, logs into ECR, creates the repository if missing, builds the image for `linux/amd64`, and pushes it as `<account>.dkr.ecr.<region>.amazonaws.com/<ECR_REPO>:summarise`.
+
+If you'd rather push to a different registry (e.g. Docker Hub, GHCR) instead of ECR, skip the script and use plain `docker tag`/`docker push`:
 ```bash
 docker tag ai4me-transcript:latest your-registry/ai4me-transcript:latest
 docker push your-registry/ai4me-transcript:latest
