@@ -15,11 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Layer 2 — Ollama binary (~150 MB; cached until install script changes)
-# Pinned to 0.30.10: newer Ollama releases require NVIDIA driver 550+, and some
-# of our GPU hosts still run driver 535 (which supports CUDA 12.2) — 0.30.10 is
-# the newest release confirmed to still detect/use the GPU on driver 535.
-# See https://github.com/ollama/ollama/releases/tag/v0.30.10 before bumping.
-ENV OLLAMA_VERSION=0.30.10
+# Pinned to 0.12.0: on our A40 vGPU hosts (driver 535), newer Ollama releases
+# either refuse the GPU outright (0.30.11+: "driver too old", needs 550+) or
+# detect it but crash on actual inference (0.30.8/0.30.10: "CUDA error:
+# device kernel image is invalid" — a vGPU-specific kernel compat issue, not
+# just a driver-version check). 0.12.0 is the newest release confirmed to run
+# real end-to-end inference on this hardware. Re-verify end-to-end (not just
+# GPU detection) with `ollama run` before bumping this.
+ENV OLLAMA_VERSION=0.12.0
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Layer 3 — Python dependencies (cached until requirements.txt changes)
