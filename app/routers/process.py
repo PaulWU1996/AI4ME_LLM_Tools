@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -32,6 +33,26 @@ class ProcessRequest(BaseModel):
     language: str = "en"
     record_key: Optional[str] = None
     metadata: Optional[dict] = None
+    model: Optional[str] = None
+
+
+class ModelInfo(BaseModel):
+    name: str
+    size: Optional[int] = None
+    modified_at: Optional[str] = None
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelInfo]
+
+
+class PullModelRequest(BaseModel):
+    model: str
+
+
+class PullModelResponse(BaseModel):
+    model: str
+    status: str
 
 class SummaryResponse(BaseModel):
     job_id: str
@@ -110,12 +131,22 @@ async def process_transcript(req: ProcessRequest):
         logger.error("ollama unavailable | job_id=%s", req.job_id)
         raise HTTPException(status_code=503, detail="Ollama service unavailable")
 
-    logger.info("ollama call start | job_id=%s", req.job_id)
+    if req.model is not None:
+        available = {m["name"] for m in await ollama_client.list_models()}
+        if req.model not in available:
+            raise HTTPException(
+                status_code=422,
+                detail=f"model '{req.model}' is not available; pull it first via POST /models/pull",
+            )
+
+    logger.info("ollama call start | job_id=%s model=%s", req.job_id, req.model or current_model())
 
     prompts_dir, response_cls = JOB_TYPES[req.job_type]
 
     try:
-        result = await ollama_client.generate(transcript, req.language, custom_prompt=req.prompts, prompts_dir=prompts_dir)
+        result = await ollama_client.generate(
+            transcript, req.language, custom_prompt=req.prompts, prompts_dir=prompts_dir, model=req.model
+        )
         validated = validate_result(req.job_type, result)
     except ValueError as exc:
         logger.error("ollama parse error | job_id=%s error=%s", req.job_id, exc)
@@ -152,6 +183,35 @@ async def process_transcript(req: ProcessRequest):
         **{k: v for k, v in validated.items() if k != "job_id"},
     )
     return response
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models():
+    if not await ollama_client.is_ready():
+        raise HTTPException(status_code=503, detail="Ollama service unavailable")
+    models = await ollama_client.list_models()
+    return ModelsResponse(
+        models=[
+            ModelInfo(name=m["name"], size=m.get("size"), modified_at=m.get("modified_at"))
+            for m in models
+        ]
+    )
+
+
+@router.post("/models/pull", response_model=PullModelResponse)
+async def pull_model(req: PullModelRequest):
+    if not await ollama_client.is_ready():
+        raise HTTPException(status_code=503, detail="Ollama service unavailable")
+
+    logger.info("model pull start | model=%s", req.model)
+    try:
+        result = await ollama_client.pull_model(req.model)
+    except httpx.HTTPStatusError as exc:
+        logger.error("model pull failed | model=%s error=%s", req.model, exc)
+        raise HTTPException(status_code=502, detail=f"failed to pull model '{req.model}': {exc}")
+    logger.info("model pull done | model=%s", req.model)
+
+    return PullModelResponse(model=req.model, status=result.get("status", "success"))
 
 
 @router.get("/health")

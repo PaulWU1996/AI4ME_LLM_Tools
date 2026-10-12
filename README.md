@@ -71,6 +71,7 @@ curl -X POST http://localhost:8000/process \
 | `transcript` | string | no | Transcript text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
 | `record_key` | string | no | Key to upsert the result under in MongoDB, if configured. Defaults to `job_id` when omitted. See [Result persistence](#result-persistence) |
 | `metadata` | object | no | Arbitrary caller-supplied context (e.g. `vpid`, `scene_id`) stored as-is alongside the result in MongoDB. Not interpreted by this service |
+| `model` | string | no | Overrides `config/model.txt` for this request only. Must already be pulled — check with `GET /models` or pull it first with `POST /models/pull`. See [Model switching](#model-switching) |
 
 **Response (HTTP 200):** the shape depends on `mode`. For `summary`:
 ```json
@@ -101,7 +102,40 @@ The same payload is written to `shared/{job_id}/output.json`, and (if MongoDB is
 |---|---|
 | 404 | No `transcript` field in the request and `transcript.txt` not found for the given `job_id` |
 | 413 | Transcript exceeds `MAX_TRANSCRIPT_CHARS` limit |
-| 422 | `job_type` is not `"script"`, or transcript is empty |
+| 422 | `job_type` is not `"script"`, transcript is empty, or `model` is not pulled |
+| 503 | Ollama is not ready |
+
+### `GET /models`
+
+Lists models currently pulled and available in Ollama.
+
+```json
+{
+  "models": [
+    { "name": "llama3.2:3b", "size": 2019393189, "modified_at": "2026-10-08T12:00:00Z" }
+  ]
+}
+```
+
+Returns HTTP 503 if Ollama is not ready.
+
+### `POST /models/pull`
+
+Pulls a model into Ollama so it can be used by `/process` (either as the default in `config/model.txt` or via the per-request `model` field). This can take several minutes depending on model size and network speed — the request blocks until the pull finishes.
+
+```bash
+curl -X POST http://localhost:8000/models/pull \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "llama3.2:3b"}'
+```
+
+```json
+{ "model": "llama3.2:3b", "status": "success" }
+```
+
+| Status | Condition |
+|---|---|
+| 502 | Ollama failed to pull the model (e.g. unknown tag, no internet access) |
 | 503 | Ollama is not ready |
 
 ### `GET /health`
@@ -272,11 +306,45 @@ The model is not an environment variable — see [Model switching](#model-switch
 llama3.2:3b
 ```
 
-It is re-read on every `/process` request, so editing this file and sending the next request switches the model immediately — no restart required. This is meant for occasional manual switches, not per-request routing; Ollama itself keeps the current model loaded in memory and only swaps it when the tag actually changes.
+It is re-read on every `/process` request, so editing this file and sending the next request switches the model immediately — no restart required. Ollama itself keeps the current model loaded in memory and only swaps it when the tag actually changes.
 
-The model must already be pulled into `./weights/ollama` before switching to it — the container only auto-pulls the model named in `config/model.txt` at startup, not on every switch.
+The model must already be pulled into `./weights/ollama` before switching to it — the container only auto-pulls the model named in `config/model.txt` at startup, not on every switch. Pull additional models at runtime with `POST /models/pull`, and check what's already pulled with `GET /models` (see [API](#api)).
 
 `config/model.txt` is required — the container refuses to start if it's missing or empty.
+
+**Per-request override:** pass a `model` field on `/process` to use a different (already-pulled) model for just that request, without touching `config/model.txt`. If the model isn't pulled yet, the request fails with 422 — pull it first via `POST /models/pull`.
+
+Example: default model is `llama3.2:3b` (in `config/model.txt`), and we want one request to use `mistral:7b` instead.
+
+1. Pull the new model into Ollama (one-time, can take a few minutes):
+   ```bash
+   curl -X POST http://localhost:8000/models/pull \
+     -H 'Content-Type: application/json' \
+     -d '{"model": "mistral:7b"}'
+   # { "model": "mistral:7b", "status": "success" }
+   ```
+
+2. Confirm it's available:
+   ```bash
+   curl http://localhost:8000/models
+   # { "models": [
+   #     { "name": "llama3.2:3b", "size": 2019393189, "modified_at": "..." },
+   #     { "name": "mistral:7b", "size": 4113000000, "modified_at": "..." }
+   # ] }
+   ```
+
+3. Send a `/process` request pointed at the new model — `config/model.txt` stays `llama3.2:3b` untouched, this one request just uses `mistral:7b`:
+   ```bash
+   curl -X POST http://localhost:8000/process \
+     -H 'Content-Type: application/json' \
+     -d '{"job_id": "test123", "job_type": "script", "model": "mistral:7b"}'
+   ```
+   The response's `model` field confirms which model actually ran it:
+   ```json
+   { "job_id": "test123", "title": "...", "summary": "...", "model": "mistral:7b", "processing_time_ms": 5213 }
+   ```
+
+Any subsequent request that omits `model` still falls back to `config/model.txt` (`llama3.2:3b` here) — the override is strictly per-request, nothing persists.
 
 ### Result persistence
 

@@ -20,6 +20,21 @@ async def is_ready() -> bool:
         logger.exception("Error occurred while checking Ollama readiness")
         return False
 
+
+async def list_models() -> list[dict]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+        response.raise_for_status()
+    return response.json().get("models", [])
+
+
+async def pull_model(name: str) -> dict:
+    payload = {"model": name, "stream": False}
+    async with httpx.AsyncClient(timeout=None) as client:
+        response = await client.post(f"{OLLAMA_BASE_URL}/api/pull", json=payload)
+        response.raise_for_status()
+    return response.json()
+
 def _build_prompt(transcript: str, language: str, custom_requirements: str | None, prompts_dir: Path) -> str:
     prompts_dir = PROMPTS_DIR / prompts_dir
     default_requirements = (prompts_dir / "transcript.txt").read_text()
@@ -46,8 +61,8 @@ def _build_prompt(transcript: str, language: str, custom_requirements: str | Non
     )
 
 
-async def generate(transcript: str, language: str = "en", custom_prompt: str | None = None, prompts_dir: Path = Path("summary")) -> dict:
-    model = current_model()
+async def generate(transcript: str, language: str = "en", custom_prompt: str | None = None, prompts_dir: Path = Path("summary"), model: str | None = None) -> dict:
+    model = model or current_model()
     prompt = _build_prompt(transcript, language, custom_prompt, prompts_dir)
 
     payload = {
