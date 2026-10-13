@@ -1,10 +1,10 @@
 services:
-  transcript-processor:
+  llm-tools:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ai4me-transcript:latest
-    container_name: transcript-processor
+    image: llm-tools:latest
+    container_name: llm-tools
     ports:
       - "8000:8000"
     volumes:
