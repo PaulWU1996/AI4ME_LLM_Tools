@@ -1,5 +1,5 @@
 services:
-  transcript-processor:
+  llm-tools:
     deploy:
       resources:
         reservations:
