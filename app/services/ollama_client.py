@@ -38,7 +38,9 @@ async def pull_model(name: str) -> dict:
 def _build_system_prompt(language: str, custom_instructions: str | None, prompts_dir: Path | None) -> str:
     if prompts_dir is None:
         if not custom_instructions:
-            raise ValueError("custom_instructions (prompts) is required when prompts_dir is None")
+            # No predefined prompt folder and no custom_instructions: assume the
+            # caller already embedded system-level instructions in the user prompt.
+            return ""
         # No predefined prompt folder: custom_instructions is the complete system prompt as-is.
         return custom_instructions.format_map({"language": language})
 

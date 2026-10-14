@@ -115,12 +115,6 @@ async def process_transcript(req: ProcessRequest):
         "job received | job_id=%s job_type=%s language=%s", req.job_id, req.job_type, req.language
     )
 
-    if req.job_type is None and not req.system_prompts:
-        raise HTTPException(
-            status_code=422,
-            detail="system_prompts is required when job_type is None (it is used as the complete system prompt)",
-        )
-
     if req.user_prompts is not None:
         transcript = req.user_prompts.strip()
         logger.info("transcript provided in request body | job_id=%s", req.job_id)
