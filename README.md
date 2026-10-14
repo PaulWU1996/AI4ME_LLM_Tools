@@ -66,7 +66,7 @@ curl -X POST http://localhost:8000/process \
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `job_id` | string | yes | Orchestrator-assigned job identity |
-| `job_type` | string | no (see note) | Which function to run — any folder name under `system_prompts/` (`"summary"` and `"tagging"` ship by default). See [Job types](#job-types) |
+| `job_type` | string | no | Which function to run — any folder name under `system_prompts/` (`"summary"` and `"tagging"` ship by default). See [Job types](#job-types) |
 | `language` | string | no | Response language, e.g. `"en"`, `"zh"` (default `"en"`) |
 | `system_prompts` | string | no | Extra instructions appended to `job_type`'s default system prompt. If `job_type` is omitted, this is instead used as the **complete** system prompt verbatim; if both `job_type` and `system_prompts` are omitted, no system prompt is sent at all. See [Prompt structure](#prompt-structure) |
 | `user_prompts` | string | no | Transcript/input text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
