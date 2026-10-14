@@ -28,8 +28,8 @@ def _max_chars() -> int:
 class ProcessRequest(BaseModel):
     job_id: str
     job_type: Optional[str] = None
-    prompts: Optional[str] = None
-    transcript: Optional[str] = None
+    system_prompts: Optional[str] = None
+    user_prompts: Optional[str] = None
     language: str = "en"
     record_key: Optional[str] = None
     metadata: Optional[dict] = None
@@ -115,14 +115,14 @@ async def process_transcript(req: ProcessRequest):
         "job received | job_id=%s job_type=%s language=%s", req.job_id, req.job_type, req.language
     )
 
-    if req.job_type is None and not req.prompts:
+    if req.job_type is None and not req.system_prompts:
         raise HTTPException(
             status_code=422,
-            detail="prompts is required when job_type is None (it is used as the complete system prompt)",
+            detail="system_prompts is required when job_type is None (it is used as the complete system prompt)",
         )
 
-    if req.transcript is not None:
-        transcript = req.transcript.strip()
+    if req.user_prompts is not None:
+        transcript = req.user_prompts.strip()
         logger.info("transcript provided in request body | job_id=%s", req.job_id)
     else:
         transcript_path = _shared_path() / req.job_id / "transcript.txt"
@@ -183,7 +183,7 @@ async def process_transcript(req: ProcessRequest):
 
     try:
         result = await ollama_client.generate(
-            transcript, req.language, custom_prompt=req.prompts, prompts_dir=prompts_dir, model=req.model
+            transcript, req.language, custom_prompt=req.system_prompts, prompts_dir=prompts_dir, model=req.model
         )
         validated = validate_result(req.job_type, result)
     except ValueError as exc:
