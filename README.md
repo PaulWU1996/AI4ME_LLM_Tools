@@ -167,7 +167,7 @@ A job_type is one function this service can perform on a transcript, selected wi
 **Adding a new job_type** (e.g. `sentiment`) just means dropping two files on disk — no code change, no rebuild:
 
 ```
-system_prompts/sentiment/transcript.txt         # requirements — must contain a {language} slot
+system_prompts/sentiment/instructions.txt       # requirements — must contain a {language} slot
 system_prompts/sentiment/output_structure.txt   # the exact JSON shape the model must return
 ```
 
@@ -258,13 +258,13 @@ When `job_type` is given, its prompt is assembled from two files inside `system_
 
 | File | Editable | Purpose |
 |---|---|---|
-| `system_prompts/{job_type}/transcript.txt` | Yes — appended to via the `prompts` field | Requirements: what the model should produce and in what style |
+| `system_prompts/{job_type}/instructions.txt` | Yes — appended to via the `prompts` field | Requirements: what the model should produce and in what style |
 | `system_prompts/{job_type}/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
 
 At runtime these are sent to Ollama as two separate parts of the request — a `system` prompt (the instructions) and a `prompt` (the actual input), rather than one flattened string:
 
 ```
-system:  {requirements}          ← from {job_type}/transcript.txt, plus the prompts field appended if provided
+system:  {requirements}          ← from {job_type}/instructions.txt, plus the prompts field appended if provided
          {output_structure}      ← always from {job_type}/output_structure.txt, never overridden
 
 prompt:  {transcript text}       ← the raw transcript, sent as-is as the user input
@@ -296,7 +296,7 @@ The model is not an environment variable — see [Model switching](#model-switch
 
 ### System prompts mount
 
-`./system_prompts` (at the repo root, alongside `docker-compose.yml`) is bind-mounted to `/app/system_prompts` inside the container. An external party can edit an existing job_type's `transcript.txt` / `output_structure.txt`, or add a whole new job_type folder, directly on the host — changes take effect on the very next request, no rebuild or restart needed. A new folder is picked up automatically too (see [Job types](#job-types)); it only needs a code change if you want it validated against a dedicated response schema instead of the generic passthrough.
+`./system_prompts` (at the repo root, alongside `docker-compose.yml`) is bind-mounted to `/app/system_prompts` inside the container. An external party can edit an existing job_type's `instructions.txt` / `output_structure.txt`, or add a whole new job_type folder, directly on the host — changes take effect on the very next request, no rebuild or restart needed. A new folder is picked up automatically too (see [Job types](#job-types)); it only needs a code change if you want it validated against a dedicated response schema instead of the generic passthrough.
 
 ### Model switching
 

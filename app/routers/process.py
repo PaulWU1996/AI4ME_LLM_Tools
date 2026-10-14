@@ -92,7 +92,7 @@ def _available_job_types() -> dict[str, Path]:
     return {
         p.name: Path(p.name)
         for p in PROMPTS_DIR.iterdir()
-        if p.is_dir() and (p / "transcript.txt").exists() and (p / "output_structure.txt").exists()
+        if p.is_dir() and (p / "instructions.txt").exists() and (p / "output_structure.txt").exists()
     }
 
 

@@ -43,7 +43,7 @@ def _build_system_prompt(language: str, custom_instructions: str | None, prompts
         return custom_instructions.format_map({"language": language})
 
     prompts_dir = PROMPTS_DIR / prompts_dir
-    default_requirements = (prompts_dir / "transcript.txt").read_text()
+    default_requirements = (prompts_dir / "instructions.txt").read_text()
     output_structure = (prompts_dir / "output_structure.txt").read_text()
 
     requirements = default_requirements
