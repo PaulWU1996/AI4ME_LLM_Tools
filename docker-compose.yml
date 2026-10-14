@@ -10,7 +10,7 @@ services:
     volumes:
       - ./weights/ollama:/root/.ollama/models
       - ./shared:/shared
-      - ./prompts:/app/prompts
+      - ./system_prompts:/app/system_prompts
       - ./config:/app/config
     environment:
       - SHARED_VOLUME_PATH=/shared

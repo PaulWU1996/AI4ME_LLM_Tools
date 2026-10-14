@@ -34,7 +34,7 @@ RUN pip3 install --break-system-packages -r requirements.txt
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 COPY config/ ./config/
-COPY prompts/ ./prompts/
+COPY system_prompts/ ./system_prompts/
 RUN chmod +x /app/scripts/entrypoint.sh
 
 # Declare mount points so Docker creates them with correct ownership

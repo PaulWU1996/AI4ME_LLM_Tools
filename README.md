@@ -1,13 +1,13 @@
 # AI4ME LLM Tools
 
-A containerized FastAPI service that processes transcripts with a local Ollama LLM. An external orchestrator sends a `job_id` and a `mode`; each mode is a distinct function with its own prompt and response schema. The service reads the transcript from a shared volume, runs it through the LLM, and returns the mode's structured result — also writing it to `output.json` on the shared volume.
+A containerized FastAPI service that processes transcripts with a local Ollama LLM. An external orchestrator sends a `job_id` and a `job_type`; each job_type is a distinct function with its own system prompt and response schema. The service reads the transcript from a shared volume, runs it through the LLM, and returns the job_type's structured result — also writing it to `output.json` on the shared volume.
 
 ## How it works
 
 ```
 Orchestrator
     │  1. Writes  shared/{job_id}/transcript.txt
-    │  2. POST /process  {"job_id": "...", "job_type": "script", "mode": "summary"}
+    │  2. POST /process  {"job_id": "...", "job_type": "summary"}
     │  3. Reads   shared/{job_id}/output.json
     ▼
 llm-tools container
@@ -34,26 +34,29 @@ echo "FIFA is a sports governing body that organizes association football events
 
 curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
-  -d '{"job_id": "test123", "job_type": "script"}'
+  -d '{"job_id": "test123", "job_type": "summary"}'
 
-# With custom requirements (overrides only the editable part of the prompt):
+# With extra instructions (appended to the job_type's default system prompt):
 curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
   -d '{
     "job_id": "test123",
-    "job_type": "script",
+    "job_type": "summary",
     "prompts": "You are a news editor. Write a punchy headline and a one-sentence summary."
   }'
 
-# Run another mode (tags instead of title + summary):
+# Run another job_type (tags instead of title + summary):
 curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
-  -d '{"job_id": "test123", "job_type": "script", "mode": "tagging"}'
+  -d '{"job_id": "test123", "job_type": "tagging"}'
 
-# With a callback URL (result is POSTed there after processing):
+# Fully custom system prompt, bypassing system_prompts/ entirely (job_type omitted):
 curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
-  -d '{"job_id": "test123", "job_type": "script", "callback_url": "http://orchestrator-host/jobs/test123/done"}'
+  -d '{
+    "job_id": "test123",
+    "prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
+  }'
 ```
 
 ## API
@@ -63,17 +66,17 @@ curl -X POST http://localhost:8000/process \
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `job_id` | string | yes | Orchestrator-assigned job identity |
-| `job_type` | string | yes | Must be `"script"` |
-| `mode` | string | no | Which function to run — `"summary"` (default) or `"tagging"`. See [Modes](#modes) |
+| `job_type` | string | no (see note) | Which function to run — any folder name under `system_prompts/` (`"summary"` and `"tagging"` ship by default). See [Job types](#job-types) |
 | `language` | string | no | Response language, e.g. `"en"`, `"zh"` (default `"en"`) |
-| `callback_url` | string | no | If set, result is POSTed here after `output.json` is written |
-| `prompts` | string | no | Overrides the requirements section of the mode's prompt (see [Prompt structure](#prompt-structure)); must contain a `{language}` slot |
+| `prompts` | string | no (see note) | Extra instructions appended to `job_type`'s default system prompt. If `job_type` is omitted, this is instead used as the **complete** system prompt verbatim — see [Prompt structure](#prompt-structure) |
 | `transcript` | string | no | Transcript text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
 | `record_key` | string | no | Key to upsert the result under in MongoDB, if configured. Defaults to `job_id` when omitted. See [Result persistence](#result-persistence) |
 | `metadata` | object | no | Arbitrary caller-supplied context (e.g. `vpid`, `scene_id`) stored as-is alongside the result in MongoDB. Not interpreted by this service |
 | `model` | string | no | Overrides `config/model.txt` for this request only. Must already be pulled — check with `GET /models` or pull it first with `POST /models/pull`. See [Model switching](#model-switching) |
 
-**Response (HTTP 200):** the shape depends on `mode`. For `summary`:
+**Note:** `job_type` and `prompts` aren't independently optional — exactly one of two shapes is required: either pass `job_type` (and `prompts` is then just an optional add-on), or omit `job_type` entirely and pass `prompts` as a full, self-contained system prompt. Omitting both fails with 422.
+
+**Response (HTTP 200):** the shape depends on `job_type`. For `summary`:
 ```json
 {
   "job_id": "test123",
@@ -94,6 +97,8 @@ For `tagging`:
 }
 ```
 
+For a fully custom `job_type: null` request, the response is whatever JSON fields the model returned, plus `job_id`/`model`/`processing_time_ms` — there's no fixed schema to validate against in that case.
+
 The same payload is written to `shared/{job_id}/output.json`, and (if MongoDB is configured) upserted into MongoDB — see [Result persistence](#result-persistence).
 
 **Error responses:**
@@ -102,7 +107,7 @@ The same payload is written to `shared/{job_id}/output.json`, and (if MongoDB is
 |---|---|
 | 404 | No `transcript` field in the request and `transcript.txt` not found for the given `job_id` |
 | 413 | Transcript exceeds `MAX_TRANSCRIPT_CHARS` limit |
-| 422 | `job_type` is not `"script"`, transcript is empty, or `model` is not pulled |
+| 422 | `job_type` omitted without `prompts`, `job_type` doesn't match a folder under `system_prompts/`, transcript is empty, or `model` is not pulled |
 | 503 | Ollama is not ready |
 
 ### `GET /models`
@@ -148,33 +153,25 @@ Returns HTTP 503 if Ollama is not ready. Poll this before sending the first job.
 
 `mongo_ready` is `true` both when MongoDB is reachable and when it isn't configured at all (the feature is off, not degraded) — it's only `false` when `MONGO_HOST` is set but the connection fails. It never causes a 503; Ollama is the only hard dependency.
 
-## Modes
+## Job types
 
-A mode is one function this service can perform on a transcript. Each mode has a name, a response schema, and its own prompt files. The mode is selected with the `mode` field on every request.
+A job_type is one function this service can perform on a transcript, selected with the `job_type` field on every request. Each job_type corresponds to a folder under `system_prompts/` holding its prompt files, discovered automatically at request time — no code change or rebuild needed to add one.
 
-| Mode | Response fields | Purpose |
-|---|---|---|
-| `summary` (default) | `title`, `summary` | Catchy headline + bullet-point summary |
-| `tagging` | `tags` | Descriptive topic/keyword tags in order of discussion |
+| job_type | Response fields | Validation | Purpose |
+|---|---|---|---|
+| `summary` | `title`, `summary` | Strict — both fields required | Catchy headline + bullet-point summary |
+| `tagging` | `tags` | Strict — must be a list of strings | Descriptive topic/keyword tags in order of discussion |
+| any other folder name | whatever the model returns | None (generic passthrough) | Custom job_type defined purely by its prompt files |
+| *(omitted)* | whatever the model returns | None (generic passthrough) | Fully custom system prompt via `prompts`, no folder involved — see [Prompt structure](#prompt-structure) |
 
-**Adding a new mode** (e.g. `sentiment`) requires two prompt files:
+**Adding a new job_type** (e.g. `sentiment`) just means dropping two files on disk — no code change, no rebuild:
 
 ```
-prompts/sentiment/transcript.txt         # requirements — must contain a {language} slot
-prompts/sentiment/output_structure.txt   # the exact JSON shape the model must return
+system_prompts/sentiment/transcript.txt         # requirements — must contain a {language} slot
+system_prompts/sentiment/output_structure.txt   # the exact JSON shape the model must return
 ```
 
-Then register the mode in the `MODES` registry in `app/routers/process.py`:
-
-```python
-MODES: dict[str, tuple[Path, type[SummaryResponse] | type[TaggingResponse] | ...]] = {
-    "summary": (Path("summary"), SummaryResponse),
-    "tagging": (Path("tagging"), TaggingResponse),
-    "sentiment": (Path("sentiment"), SentimentResponse),   # new
-}
-```
-
-The response model declares the mode's output fields, and a matching branch in `_validate_result` checks the LLM's JSON before it is returned or written to `output.json`. No other code changes are needed — the mode is discovered at request time, so any new `mode` value starts working immediately after a rebuild.
+As soon as both files exist, `{"job_id": "...", "job_type": "sentiment"}` works immediately. Since `sentiment` isn't one of the two built-in schemas, its response is returned generically (whatever JSON fields the model produces, plus `job_id`/`model`/`processing_time_ms`) rather than validated against a specific shape. Giving a new job_type the same strict field validation as `summary`/`tagging` does still require a code change — add a response model and a branch in `validate_result` in `app/routers/process.py`.
 
 ## Composing with the orchestrator
 
@@ -195,7 +192,7 @@ docker compose build
     volumes:
       - ./weights/ollama:/root/.ollama/models
       - ./shared:/shared
-      - ./prompts:/app/prompts
+      - ./system_prompts:/app/system_prompts
       - ./config:/app/config
     environment:
       - SHARED_VOLUME_PATH=/shared
@@ -253,35 +250,38 @@ docker push your-registry/ai4me-transcript:latest
 ```
 Then update `image:` in the snippet above to match the registry path.
 
-The orchestrator must provide its own `./config/model.txt` and `./prompts/` directories alongside its `docker-compose.yml` — see [Model switching](#model-switching) and [Prompt structure](#prompt-structure).
+The orchestrator must provide its own `./config/model.txt` and `./system_prompts/` directories alongside its `docker-compose.yml` — see [Model switching](#model-switching) and [Prompt structure](#prompt-structure).
 
 ## Prompt structure
 
-Each mode's prompt is assembled from two files inside `prompts/{mode}/`:
+When `job_type` is given, its prompt is assembled from two files inside `system_prompts/{job_type}/`:
 
 | File | Editable | Purpose |
 |---|---|---|
-| `prompts/{mode}/transcript.txt` | Yes — overridable via the `prompts` field | Requirements: what the model should produce and in what style |
-| `prompts/{mode}/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
+| `system_prompts/{job_type}/transcript.txt` | Yes — appended to via the `prompts` field | Requirements: what the model should produce and in what style |
+| `system_prompts/{job_type}/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
 
-The final prompt assembled at runtime looks like:
+At runtime these are sent to Ollama as two separate parts of the request — a `system` prompt (the instructions) and a `prompt` (the actual input), rather than one flattened string:
 
 ```
-<system>
-{requirements}          ← from {mode}/transcript.txt, or the prompts field if provided
-{output_structure}      ← always from {mode}/output_structure.txt, never overridden
-</system>
+system:  {requirements}          ← from {job_type}/transcript.txt, plus the prompts field appended if provided
+         {output_structure}      ← always from {job_type}/output_structure.txt, never overridden
 
-<user>
-Transcript:
----
-{transcript text}       ← injected by the service, not part of either template
----
-Produce the JSON output now.
-</user>
+prompt:  {transcript text}       ← the raw transcript, sent as-is as the user input
 ```
 
-Keeping the output structure fixed means the JSON parser always gets a predictable response regardless of what custom requirements are passed in. When providing a custom `prompts` value, only include a `{language}` slot — the transcript and output format are handled automatically.
+Keeping the output structure fixed means the JSON parser always gets a predictable response regardless of what extra instructions are passed in. When providing a `prompts` value alongside `job_type`, only include a `{language}` slot — the transcript and output format are handled automatically. The `prompts` field is optional in this case: with it omitted, the system prompt is just the job_type's file-based defaults.
+
+**When `job_type` is omitted entirely**, no folder under `system_prompts/` is read at all — `prompts` is then required, and is used verbatim as the **complete** system prompt (still formatted with a `{language}` slot if present). This is the escape hatch for a caller who wants to bring their own system prompt without defining a new job_type folder:
+
+```json
+{
+  "job_id": "test123",
+  "prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
+}
+```
+
+Since there's no fixed `output_structure.txt` in this mode, the response is returned generically — see the last row of [Job types](#job-types).
 
 ## Configuration
 
@@ -294,9 +294,9 @@ Most values are hardcoded in `docker-compose.yml`. Two things are instead mounte
 
 The model is not an environment variable — see [Model switching](#model-switching) below.
 
-### Prompts mount
+### System prompts mount
 
-`./prompts` (at the repo root, alongside `docker-compose.yml`) is bind-mounted to `/app/prompts` inside the container. An external party can edit an existing mode's `transcript.txt` / `output_structure.txt`, or add a whole new mode folder, directly on the host — changes take effect on the next request, no rebuild needed. Registering a brand-new `mode` value still requires adding it to `JOB_TYPES` in `app/routers/process.py` (and a rebuild), since that's a code change, not a prompt change.
+`./system_prompts` (at the repo root, alongside `docker-compose.yml`) is bind-mounted to `/app/system_prompts` inside the container. An external party can edit an existing job_type's `transcript.txt` / `output_structure.txt`, or add a whole new job_type folder, directly on the host — changes take effect on the very next request, no rebuild or restart needed. A new folder is picked up automatically too (see [Job types](#job-types)); it only needs a code change if you want it validated against a dedicated response schema instead of the generic passthrough.
 
 ### Model switching
 
@@ -337,7 +337,7 @@ Example: default model is `llama3.2:3b` (in `config/model.txt`), and we want one
    ```bash
    curl -X POST http://localhost:8000/process \
      -H 'Content-Type: application/json' \
-     -d '{"job_id": "test123", "job_type": "script", "model": "mistral:7b"}'
+     -d '{"job_id": "test123", "job_type": "summary", "model": "mistral:7b"}'
    ```
    The response's `model` field confirms which model actually ran it:
    ```json
@@ -435,7 +435,7 @@ docker logs transcript-processor 2>&1 | grep "ERROR"           # errors only
 
 A happy-path request produces:
 ```
-INFO  | job received      | job_id=abc123 job_type=script language=en
+INFO  | job received      | job_id=abc123 job_type=summary language=en
 INFO  | transcript read   | job_id=abc123 chars=4821
 INFO  | ollama call start | job_id=abc123
 INFO  | ollama call done  | job_id=abc123 ms=18432

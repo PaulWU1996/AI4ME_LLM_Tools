@@ -3,13 +3,13 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from app.config import current_model
+from app.config import PROMPTS_DIR, current_model
 from app.services import mongo_client, ollama_client
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def _max_chars() -> int:
 
 class ProcessRequest(BaseModel):
     job_id: str
-    job_type: Literal["summary", "tagging"] = "summary"
+    job_type: Optional[str] = None
     prompts: Optional[str] = None
     transcript: Optional[str] = None
     language: str = "en"
@@ -68,13 +68,35 @@ class TaggingResponse(BaseModel):
     processing_time_ms: int
 
 
-JOB_TYPES: dict[str, tuple[Path, type[SummaryResponse] | type[TaggingResponse]]] = {
-    "summary": (Path("summary"), SummaryResponse),
-    "tagging": (Path("tagging"), TaggingResponse),
+class CustomResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    model: str
+    processing_time_ms: int
+
+
+# job_types with a fixed, strictly-validated response schema. Any other folder
+# found under system_prompts/ at request time is also usable, with a generic
+# CustomResponse and no field-specific validation — this is what makes dropping
+# a new system_prompts/{name}/ folder on disk work immediately, with no code change.
+KNOWN_RESPONSE_CLASSES: dict[str, type[BaseModel]] = {
+    "summary": SummaryResponse,
+    "tagging": TaggingResponse,
 }
 
 
-def validate_result(job_type: str, result: dict) -> dict:
+def _available_job_types() -> dict[str, Path]:
+    if not PROMPTS_DIR.exists():
+        return {}
+    return {
+        p.name: Path(p.name)
+        for p in PROMPTS_DIR.iterdir()
+        if p.is_dir() and (p / "transcript.txt").exists() and (p / "output_structure.txt").exists()
+    }
+
+
+def validate_result(job_type: str | None, result: dict) -> dict:
     if job_type == "summary":
         if not isinstance(result.get("title"), str) or not result["title"].strip():
             raise ValueError("Model returned no valid 'title'")
@@ -87,11 +109,17 @@ def validate_result(job_type: str, result: dict) -> dict:
     return result
 
 
-@router.post("/process", response_model=SummaryResponse | TaggingResponse)
+@router.post("/process", response_model=SummaryResponse | TaggingResponse | CustomResponse)
 async def process_transcript(req: ProcessRequest):
     logger.info(
         "job received | job_id=%s job_type=%s language=%s", req.job_id, req.job_type, req.language
     )
+
+    if req.job_type is None and not req.prompts:
+        raise HTTPException(
+            status_code=422,
+            detail="prompts is required when job_type is None (it is used as the complete system prompt)",
+        )
 
     if req.transcript is not None:
         transcript = req.transcript.strip()
@@ -141,7 +169,17 @@ async def process_transcript(req: ProcessRequest):
 
     logger.info("ollama call start | job_id=%s model=%s", req.job_id, req.model or current_model())
 
-    prompts_dir, response_cls = JOB_TYPES[req.job_type]
+    if req.job_type is None:
+        prompts_dir, response_cls = None, CustomResponse
+    else:
+        available_job_types = _available_job_types()
+        if req.job_type not in available_job_types:
+            raise HTTPException(
+                status_code=422,
+                detail=f"job_type '{req.job_type}' not found under system_prompts/; available: {sorted(available_job_types)}",
+            )
+        prompts_dir = available_job_types[req.job_type]
+        response_cls = KNOWN_RESPONSE_CLASSES.get(req.job_type, CustomResponse)
 
     try:
         result = await ollama_client.generate(

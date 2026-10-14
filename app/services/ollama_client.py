@@ -35,39 +35,33 @@ async def pull_model(name: str) -> dict:
         response.raise_for_status()
     return response.json()
 
-def _build_prompt(transcript: str, language: str, custom_requirements: str | None, prompts_dir: Path) -> str:
+def _build_system_prompt(language: str, custom_instructions: str | None, prompts_dir: Path | None) -> str:
+    if prompts_dir is None:
+        if not custom_instructions:
+            raise ValueError("custom_instructions (prompts) is required when prompts_dir is None")
+        # No predefined prompt folder: custom_instructions is the complete system prompt as-is.
+        return custom_instructions.format_map({"language": language})
+
     prompts_dir = PROMPTS_DIR / prompts_dir
     default_requirements = (prompts_dir / "transcript.txt").read_text()
     output_structure = (prompts_dir / "output_structure.txt").read_text()
-    
+
     requirements = default_requirements
-    if custom_requirements:
-        requirements = f"{default_requirements}\n\n{custom_requirements}"
+    if custom_instructions:
+        requirements = f"{default_requirements}\n\n{custom_instructions}"
 
     rendered_requirements = requirements.format_map({"language": language})
-    return (
-        "<system>\n"
-        + rendered_requirements
-        + "\n"
-        + output_structure
-        + "</system>\n\n"
-        "<user>\n"
-        "Transcript:\n"
-        "---\n"
-        + transcript
-        + "\n---\n\n"
-        "Produce the JSON output now.\n"
-        "</user>"
-    )
+    return rendered_requirements + "\n" + output_structure
 
 
-async def generate(transcript: str, language: str = "en", custom_prompt: str | None = None, prompts_dir: Path = Path("summary"), model: str | None = None) -> dict:
+async def generate(transcript: str, language: str = "en", custom_prompt: str | None = None, prompts_dir: Path | None = Path("summary"), model: str | None = None) -> dict:
     model = model or current_model()
-    prompt = _build_prompt(transcript, language, custom_prompt, prompts_dir)
+    system_prompt = _build_system_prompt(language, custom_prompt, prompts_dir)
 
     payload = {
         "model": model,
-        "prompt": prompt,
+        "system": system_prompt,
+        "prompt": transcript,
         "format": "json",
         "stream": False,
         "options": {
@@ -75,8 +69,8 @@ async def generate(transcript: str, language: str = "en", custom_prompt: str | N
             "num_predict": 512,
         },
     }
-    
-    logger.info(f"Generating with prompt:\n {prompt}")
+
+    logger.info(f"Generating with system prompt:\n {system_prompt}")
 
     t0 = time.monotonic()
     async with httpx.AsyncClient(timeout=120.0) as client:

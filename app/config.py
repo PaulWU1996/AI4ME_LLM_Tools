@@ -4,7 +4,7 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/app/config"))
 MODEL_CONFIG_PATH = CONFIG_DIR / "model.txt"
 
-PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/app/prompts"))
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/app/system_prompts"))
 
 
 def current_model() -> str:
