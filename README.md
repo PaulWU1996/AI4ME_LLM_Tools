@@ -42,7 +42,7 @@ curl -X POST http://localhost:8000/process \
   -d '{
     "job_id": "test123",
     "job_type": "summary",
-    "prompts": "You are a news editor. Write a punchy headline and a one-sentence summary."
+    "system_prompts": "You are a news editor. Write a punchy headline and a one-sentence summary."
   }'
 
 # Run another job_type (tags instead of title + summary):
@@ -55,7 +55,7 @@ curl -X POST http://localhost:8000/process \
   -H 'Content-Type: application/json' \
   -d '{
     "job_id": "test123",
-    "prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
+    "system_prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
   }'
 ```
 
@@ -68,13 +68,11 @@ curl -X POST http://localhost:8000/process \
 | `job_id` | string | yes | Orchestrator-assigned job identity |
 | `job_type` | string | no (see note) | Which function to run — any folder name under `system_prompts/` (`"summary"` and `"tagging"` ship by default). See [Job types](#job-types) |
 | `language` | string | no | Response language, e.g. `"en"`, `"zh"` (default `"en"`) |
-| `prompts` | string | no (see note) | Extra instructions appended to `job_type`'s default system prompt. If `job_type` is omitted, this is instead used as the **complete** system prompt verbatim — see [Prompt structure](#prompt-structure) |
-| `transcript` | string | no | Transcript text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
+| `system_prompts` | string | no | Extra instructions appended to `job_type`'s default system prompt. If `job_type` is omitted, this is instead used as the **complete** system prompt verbatim; if both `job_type` and `system_prompts` are omitted, no system prompt is sent at all. See [Prompt structure](#prompt-structure) |
+| `user_prompts` | string | no | Transcript/input text to process directly. If omitted, falls back to reading `shared/{job_id}/transcript.txt` |
 | `record_key` | string | no | Key to upsert the result under in MongoDB, if configured. Defaults to `job_id` when omitted. See [Result persistence](#result-persistence) |
 | `metadata` | object | no | Arbitrary caller-supplied context (e.g. `vpid`, `scene_id`) stored as-is alongside the result in MongoDB. Not interpreted by this service |
 | `model` | string | no | Overrides `config/model.txt` for this request only. Must already be pulled — check with `GET /models` or pull it first with `POST /models/pull`. See [Model switching](#model-switching) |
-
-**Note:** `job_type` and `prompts` aren't independently optional — exactly one of two shapes is required: either pass `job_type` (and `prompts` is then just an optional add-on), or omit `job_type` entirely and pass `prompts` as a full, self-contained system prompt. Omitting both fails with 422.
 
 **Response (HTTP 200):** the shape depends on `job_type`. For `summary`:
 ```json
@@ -105,9 +103,9 @@ The same payload is written to `shared/{job_id}/output.json`, and (if MongoDB is
 
 | Status | Condition |
 |---|---|
-| 404 | No `transcript` field in the request and `transcript.txt` not found for the given `job_id` |
+| 404 | No `user_prompts` field in the request and `transcript.txt` not found for the given `job_id` |
 | 413 | Transcript exceeds `MAX_TRANSCRIPT_CHARS` limit |
-| 422 | `job_type` omitted without `prompts`, `job_type` doesn't match a folder under `system_prompts/`, transcript is empty, or `model` is not pulled |
+| 422 | `job_type` given but doesn't match a folder under `system_prompts/`, transcript is empty, or `model` is not pulled |
 | 503 | Ollama is not ready |
 
 ### `GET /models`
@@ -161,8 +159,8 @@ A job_type is one function this service can perform on a transcript, selected wi
 |---|---|---|---|
 | `summary` | `title`, `summary` | Strict — both fields required | Catchy headline + bullet-point summary |
 | `tagging` | `tags` | Strict — must be a list of strings | Descriptive topic/keyword tags in order of discussion |
-| any other folder name | whatever the model returns | None (generic passthrough) | Custom job_type defined purely by its prompt files |
-| *(omitted)* | whatever the model returns | None (generic passthrough) | Fully custom system prompt via `prompts`, no folder involved — see [Prompt structure](#prompt-structure) |
+| any other folder name | whatever JSON the model returns | None (generic passthrough) | Custom job_type defined purely by its prompt files |
+| *(omitted)* | whatever JSON the model returns | None (generic passthrough) | Fully custom system prompt via `system_prompts`, no folder involved — see [Prompt structure](#prompt-structure) |
 
 **Adding a new job_type** (e.g. `sentiment`) just means dropping two files on disk — no code change, no rebuild:
 
@@ -258,30 +256,33 @@ When `job_type` is given, its prompt is assembled from two files inside `system_
 
 | File | Editable | Purpose |
 |---|---|---|
-| `system_prompts/{job_type}/instructions.txt` | Yes — appended to via the `prompts` field | Requirements: what the model should produce and in what style |
+| `system_prompts/{job_type}/instructions.txt` | Yes — appended to via the `system_prompts` field | Requirements: what the model should produce and in what style |
 | `system_prompts/{job_type}/output_structure.txt` | No — always fixed | Output schema: the exact JSON format the model must return |
 
 At runtime these are sent to Ollama as two separate parts of the request — a `system` prompt (the instructions) and a `prompt` (the actual input), rather than one flattened string:
 
 ```
-system:  {requirements}          ← from {job_type}/instructions.txt, plus the prompts field appended if provided
+system:  {requirements}          ← from {job_type}/instructions.txt, plus the system_prompts field appended if provided
          {output_structure}      ← always from {job_type}/output_structure.txt, never overridden
 
-prompt:  {transcript text}       ← the raw transcript, sent as-is as the user input
+prompt:  {user_prompts text}     ← the raw transcript/input, sent as-is as the user input
 ```
 
-Keeping the output structure fixed means the JSON parser always gets a predictable response regardless of what extra instructions are passed in. When providing a `prompts` value alongside `job_type`, only include a `{language}` slot — the transcript and output format are handled automatically. The `prompts` field is optional in this case: with it omitted, the system prompt is just the job_type's file-based defaults.
+Keeping the output structure fixed means the JSON parser always gets a predictable response regardless of what extra instructions are passed in. When providing a `system_prompts` value alongside `job_type`, only include a `{language}` slot — the transcript and output format are handled automatically. The `system_prompts` field is optional in this case: with it omitted, the system prompt is just the job_type's file-based defaults.
 
-**When `job_type` is omitted entirely**, no folder under `system_prompts/` is read at all — `prompts` is then required, and is used verbatim as the **complete** system prompt (still formatted with a `{language}` slot if present). This is the escape hatch for a caller who wants to bring their own system prompt without defining a new job_type folder:
+**When `job_type` is omitted entirely**, no folder under `system_prompts/` is read at all, and `system_prompts` becomes fully optional too:
+
+- If provided, it's used verbatim as the **complete** system prompt (still formatted with a `{language}` slot if present).
+- If omitted, no system prompt is sent at all (`system: ""`) — the caller is assumed to have folded their own instructions directly into `user_prompts`.
 
 ```json
 {
   "job_id": "test123",
-  "prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
+  "system_prompts": "You are a sentiment classifier. Respond ONLY as JSON: {\"sentiment\": \"positive|neutral|negative\"}"
 }
 ```
 
-Since there's no fixed `output_structure.txt` in this mode, the response is returned generically — see the last row of [Job types](#job-types).
+**Important:** regardless of `job_type`, the service always requests `format: "json"` from Ollama and parses the response with `json.loads()` — there's currently no free-form/Markdown output mode, even when `job_type` is omitted. A `system_prompts`/`user_prompts` combination that asks the model for prose or Markdown (rather than JSON) will fail with a `500 Model returned malformed JSON` error. The response in the JSON-returning case is generic — see the last row of [Job types](#job-types).
 
 ## Configuration
 
